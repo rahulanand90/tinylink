@@ -1,0 +1,89 @@
+@startuml TinyLink URL Shortener Architecture
+
+!define DOCKER_COLOR #F1F1F1
+!define NGINX_COLOR #009639
+!define API_COLOR #6CB33F
+!define GO_COLOR #00ADD8
+!define POSTGRES_COLOR #336791
+!define REDIS_COLOR #DC382D
+!define KAFKA_COLOR #231F20
+
+skinparam componentStyle rectangle
+skinparam defaultTextAlignment center
+
+rectangle "Docker Network: External" as ExternalNetwork #DOCKER_COLOR {
+  rectangle "Nginx Load Balancer\nPort: 80/443" as Nginx #NGINX_COLOR
+}
+
+rectangle "Docker Network: Internal" as InternalNetwork #DOCKER_COLOR {
+  rectangle "API Gateway\n(Rate Limiting, Auth)\nPort: 8080" as APIGateway #API_COLOR
+  
+  rectangle "TinyLink Service Cluster" as ServiceCluster {
+    rectangle "TinyLink Service Instance 1\nPort: 8000" as Service1 #GO_COLOR
+    rectangle "TinyLink Service Instance 2\nPort: 8000" as Service2 #GO_COLOR
+    rectangle "TinyLink Service Instance N\nPort: 8000" as ServiceN #GO_COLOR
+  }
+  
+  rectangle "Redis Cluster\nPort: 6379" as Redis #REDIS_COLOR {
+    database "Cache" as RedisCache
+    database "Rate Limit Counters" as RedisRateLimit
+  }
+  
+  rectangle "PostgreSQL\nPort: 5432" as PostgreSQL #POSTGRES_COLOR {
+    database "Master" as PostgresMaster
+    database "Replica" as PostgresReplica
+  }
+  
+  rectangle "Message Queue (Kafka)\nPort: 9092" as Kafka #KAFKA_COLOR
+  
+  rectangle "Analytics Service\nPort: 8001" as AnalyticsService #GO_COLOR
+}
+
+' External connections
+Nginx --> APIGateway : "HTTP/HTTPS"
+
+' API Gateway connections
+APIGateway --> Service1 : "HTTP"
+APIGateway --> Service2 : "HTTP"
+APIGateway --> ServiceN : "HTTP"
+APIGateway --> Redis : "TCP"
+
+' Service connections
+Service1 --> Redis : "TCP"
+Service1 --> PostgresMaster : "TCP"
+Service1 --> Kafka : "TCP"
+Service2 --> Redis : "TCP"
+Service2 --> PostgresMaster : "TCP"
+Service2 --> Kafka : "TCP"
+ServiceN --> Redis : "TCP"
+ServiceN --> PostgresMaster : "TCP"
+ServiceN --> Kafka : "TCP"
+
+' Database replication
+PostgresMaster --> PostgresReplica : "Replication"
+
+' Analytics pipeline
+Kafka --> AnalyticsService : "TCP"
+AnalyticsService --> PostgresMaster : "TCP"
+
+' Request flows
+note right of Nginx
+  <b>URL Creation (POST):</b>
+  1. Client -> Nginx -> API Gateway
+  2. API Gateway (auth/rate limit) -> Service
+  3. Service -> PostgreSQL (store)
+  4. Service -> Redis (cache)
+  5. Response back to client
+end note
+
+note left of Nginx
+  <b>URL Redirect (GET):</b>
+  1. Client -> Nginx -> API Gateway
+  2. API Gateway -> Service
+  3. Service -> Redis (check cache)
+  4. If cache miss: Service -> PostgreSQL
+  5. Service -> Kafka (log click event)
+  6. Redirect response to client
+end note
+
+@enduml
